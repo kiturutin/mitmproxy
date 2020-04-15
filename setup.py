@@ -86,6 +86,7 @@ setup(
         "publicsuffix2>=2.20190812,<3",
         "zstandard>=0.11,<0.14",
         "falcon>=2.0.0",
+        "python-dateutil>=2.8.1"
     ],
     extras_require={
         ':sys_platform == "win32"': [

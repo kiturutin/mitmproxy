@@ -9,15 +9,23 @@ initialized = False
 
 
 def load(l):
+    ctx.log.info('Loading addons manager add-on...')
     l.add_option(
-        "rest-api-port", int, 8088, "REST api management port.",
+        "addons_management_port", int, 8088, "REST api management port.",
     )
 
 
 def running():
+    global initialized
     if not initialized and is_script_loader_initialized():
+        ctx.log.info('Scanning for custom add-ons resources...')
         resources = get_resources()
+        ctx.log.info('Found resources:')
+        for r in resources:
+            ctx.log.info('  - ' + str(r.__class__))
+        ctx.log.info('Starting falcon REST service...')
         _thread.start_new_thread(start_falcon, tuple([resources]))
+        initialized = True
 
 
 def is_script_loader_initialized():
@@ -52,7 +60,7 @@ def start_falcon(resources):
     for resource in resources:
         app.add_route("/" + resource.addon_path() + "/{method_name}", resource)
 
-    with make_server('', ctx.options.hardump, app) as httpd:
-        print('Starting REST API management on port: ' + ctx.options.hardump + '...')
+    with make_server('', ctx.options.addons_management_port, app) as httpd:
+        print('Starting REST API management on port: {}'.format(ctx.options.addons_management_port))
         httpd.serve_forever()
 
