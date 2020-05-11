@@ -8,6 +8,7 @@ from mitmproxy import connections  # noqa
 from mitmproxy import exceptions
 from mitmproxy import http
 from mitmproxy import flow
+from mitmproxy.exceptions import TcpTimeout
 from mitmproxy.proxy.protocol import base
 from mitmproxy.proxy.protocol.websocket import WebSocketLayer
 from mitmproxy.net import websockets
@@ -212,7 +213,7 @@ class HttpLayer(base.Layer):
             # HTTPS tasting means that ordinary errors like resolution
             # and connection errors can happen here.
             self.send_error_response(502, repr(e))
-            f.error = flow.Error(str(e))
+            f.error = flow.Error(msg=str(e), err=e)
             self.channel.ask("error", f)
             return False
 
@@ -289,7 +290,7 @@ class HttpLayer(base.Layer):
             self.send_error_response(400, repr(e))
             # Request may be malformed at this point, so we unset it.
             f.request = None
-            f.error = flow.Error(str(e))
+            f.error = flow.Error(msg=str(e), err=e)
             self.channel.ask("error", f)
             self.log(
                 "request",
@@ -339,6 +340,7 @@ class HttpLayer(base.Layer):
                 )
 
                 def get_response():
+                    self.channel.ask("http_proxy_to_server_request_started", f)
                     self.send_request_headers(f.request)
                     if f.request.stream:
                         chunks = self.read_request_body(f.request)
@@ -347,7 +349,8 @@ class HttpLayer(base.Layer):
                         self.send_request_body(f.request, chunks)
                     else:
                         self.send_request_body(f.request, [f.request.data.content])
-
+                    self.channel.ask("http_proxy_to_server_request_finished", f)
+                    self.channel.ask("http_server_to_proxy_response_receiving", f)
                     f.response = self.read_response_headers()
 
                 try:
@@ -407,6 +410,7 @@ class HttpLayer(base.Layer):
                 self.channel.ask("responseheaders", f)
 
             self.log("response", "debug", [repr(f.response)])
+            self.channel.ask("http_server_to_proxy_response_received", f)
             self.channel.ask("response", f)
 
             if not f.response.stream:
@@ -454,8 +458,11 @@ class HttpLayer(base.Layer):
 
         except (exceptions.ProtocolException, exceptions.NetlibException) as e:
             if not f.response:
-                self.send_error_response(502, repr(e))
-                f.error = flow.Error(str(e))
+                if isinstance(e, TcpTimeout):
+                    self.send_error_response(504, repr(e))
+                else:
+                    self.send_error_response(502, repr(e))
+                f.error = flow.Error(msg=str(e), err=e)
                 self.channel.ask("error", f)
                 return False
             else:

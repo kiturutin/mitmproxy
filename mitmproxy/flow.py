@@ -24,12 +24,13 @@ class Error(stateobject.StateObject):
             timestamp: Seconds since the epoch
     """
 
-    def __init__(self, msg: str, timestamp=None) -> None:
+    def __init__(self, msg: str, timestamp=None, err=None) -> None:
         """
         @type msg: str
         @type timestamp: float
         """
         self.msg = msg
+        self.cause = err
         self.timestamp = timestamp or time.time()
 
     _stateobject_attributes = dict(

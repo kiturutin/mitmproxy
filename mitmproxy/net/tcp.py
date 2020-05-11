@@ -7,6 +7,8 @@ import threading
 import time
 import traceback
 
+from mitmproxy import ctx
+
 from typing import Optional  # noqa
 
 from mitmproxy.net import tls
@@ -417,6 +419,9 @@ class TCPClient(_Connection):
         # https://github.com/python/cpython/blob/3cc5817cfaf5663645f4ee447eaed603d2ad290a/Lib/socket.py
 
         err = None
+        idle_timeout = ctx.options.connection_idle_seconds
+        if idle_timeout != -1:
+            timeout = idle_timeout
         for res in socket.getaddrinfo(self.address[0], self.address[1], 0, socket.SOCK_STREAM):
             af, socktype, proto, canonname, sa = res
             sock = None
@@ -442,6 +447,7 @@ class TCPClient(_Connection):
 
             except socket.error as _:
                 err = _
+                self.ip_address = sa
                 if sock is not None:
                     sock.close()
 
@@ -452,12 +458,15 @@ class TCPClient(_Connection):
 
     def connect(self):
         try:
+            self.channel.ask("tcp_resolving_server_address_started", self)
             connection = self.create_connection()
         except (socket.error, IOError) as err:
             raise exceptions.TcpException(
                 'Error connecting to "%s": %s' %
                 (self.address[0], err)
-            )
+            ) from err
+        finally:
+            self.channel.ask("tcp_resolving_server_address_finished", self)
         self.connection = connection
         self.source_address = connection.getsockname()
         self.ip_address = connection.getpeername()

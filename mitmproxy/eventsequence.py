@@ -16,12 +16,18 @@ Events = frozenset([
     "tcp_message",
     "tcp_error",
     "tcp_end",
+    "tcp_resolving_server_address_started",
+    "tcp_resolving_server_address_finished",
     # HTTP
     "http_connect",
     "request",
     "requestheaders",
     "response",
     "responseheaders",
+    "http_proxy_to_server_request_started",
+    "http_proxy_to_server_request_finished",
+    "http_server_to_proxy_response_receiving",
+    "http_server_to_proxy_response_received",
     "error",
     # WebSocket
     "websocket_handshake",

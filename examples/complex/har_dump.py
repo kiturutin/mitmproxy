@@ -3,6 +3,8 @@ import base64
 import typing
 import tempfile
 
+import mitmproxy.tcp
+
 from datetime import datetime
 from datetime import timezone
 import dateutil.parser
@@ -10,11 +12,12 @@ import dateutil.parser
 from enum import Enum, auto
 
 import falcon
-
+import time
 from mitmproxy import ctx
 
 from mitmproxy import connections
 from mitmproxy import version
+from mitmproxy.exceptions import TcpTimeout
 from mitmproxy.utils import strutils
 from mitmproxy.net.http import cookies
 
@@ -24,6 +27,10 @@ SERVERS_SEEN: typing.Set[connections.ServerConnection] = set()
 
 DEFAULT_PAGE_REF = "Default"
 DEFAULT_PAGE_TITLE = "Default"
+
+RESOLUTION_FAILED_ERROR_MESSAGE = "Unable to resolve host: "
+CONNECTION_FAILED_ERROR_MESSAGE = "Unable to connect to host"
+RESPONSE_TIMED_OUT_ERROR_MESSAGE = "Response timed out"
 
 
 class HarCaptureTypes(Enum):
@@ -76,7 +83,6 @@ class HarDumpAddonResource:
         return "har"
 
     def __init__(self, harDumpAddOn):
-        self.num = 0
         self.name = "hardump"
         self.harDumpAddOn = harDumpAddOn
 
@@ -152,6 +158,9 @@ class HarDumpAddonResource:
         capture_types_parsed = []
         for ct in capture_types:
             ct = ct.strip(" ")
+            if ct == "":
+                break
+
             if not hasattr(HarCaptureTypes, ct):
                 resp.status = falcon.HTTP_400
                 resp.body = "Invalid HAR Capture type"
@@ -172,6 +181,11 @@ class HarDumpAddOn:
         self.har_page_count = 0
         self.har_capture_types = []
         self.current_har_page = None
+        self.dns_resolution_started_nanos = 0
+        self.connection_started_nanos = 0
+        self.send_started_nanos = 0
+        self.send_finished_nanos = 0
+        self.response_receive_started_nanos = 0
 
     def get_har(self, clean_har):
         if clean_har:
@@ -201,23 +215,26 @@ class HarDumpAddOn:
             "log": self.generate_new_har_log()
         }
 
+    def generate_new_page_timings(self):
+        return {
+            "onContentLoad": 0,
+            "onLoad": 0,
+            "comment": ""
+        }
+
     def generate_new_har_page(self):
         return {
             "title": "",
             "id": "",
             "startedDateTime": "",
-            "pageTimings": {
-                "onContentLoad": 0,
-                "onLoad": 0,
-                "comment": ""
-            }
+            "pageTimings": self.generate_new_page_timings()
         }
 
     def generate_new_har_post_data(self):
         return {
             "mimeType": "multipart/form-data",
             "params": [],
-            "text" : "plain posted data",
+            "text": "plain posted data",
             "comment": ""
         }
 
@@ -233,6 +250,18 @@ class HarDumpAddOn:
             "bodySize": 0,
             "comment": "",
             "additional": {}
+        }
+
+    def generate_har_timings(self):
+        return {
+            "blocked": -1,
+            "dns": -1,
+            "connect": -1,
+            "ssl": -1,
+            "send": 0,
+            "wait": 0,
+            "receive": 0,
+            "comment": ""
         }
 
     def generate_har_entry_response(self):
@@ -251,10 +280,9 @@ class HarDumpAddOn:
                 "comment": "",
             },
             "redirectURL": "",
-            "headersSize": 0,
-            "bodySize": 0,
+            "headersSize": -1,
+            "bodySize": -1,
             "comment": 0,
-            "additional": {}
         }
 
     def generate_har_entry_response_for_failure(self):
@@ -262,9 +290,7 @@ class HarDumpAddOn:
         result['status'] = 0
         result['statusText'] = ""
         result['httpVersion'] = "unknown"
-        result['additional'] = {
-            "_errorMessage": "No response received"
-        }
+        result['_errorMessage'] = "No response received"
         return result
 
     def generate_har_entry(self):
@@ -275,11 +301,10 @@ class HarDumpAddOn:
             "request": {},
             "response": {},
             "cache": {},
-            "timings": {},
+            "timings": self.generate_har_timings(),
             "serverIPAddress": "",
             "connection": "",
-            "comment": "",
-            "additional": {}
+            "comment": ""
         }
 
     def get_or_create_har(self, page_ref, page_title, create_page=False):
@@ -334,7 +359,7 @@ class HarDumpAddOn:
         log_copy = self.generate_new_har_log()
 
         for entry in har['log']['entries']:
-            if entry['page_ref'] in page_refs_to_copy:
+            if entry['pageref'] in page_refs_to_copy:
                 log_copy['entries'].append(entry)
 
         for page in har['log']['pages']:
@@ -404,12 +429,12 @@ class HarDumpAddOn:
         if 'startedDateTime' in previous_har_page:
             on_load_delta_ms = (datetime.utcnow() - dateutil.parser.isoparse(
                 previous_har_page['startedDateTime'])).total_seconds() * 1000
-            previous_har_page['pageTimings']['onLoad'] = on_load_delta_ms
+            previous_har_page['pageTimings']['onLoad'] = int(on_load_delta_ms)
 
         default_har_page = self.get_default_har_page()
         if default_har_page is not None:
             if 'startedDateTime' in default_har_page:
-                default_har_page['pageTimings'] = \
+                default_har_page['pageTimings']['onLoad'] = \
                     (
                         datetime.utcnow() - dateutil.parser.isoparse(
                         default_har_page['startedDateTime'])
@@ -446,27 +471,42 @@ class HarDumpAddOn:
 
         return tmp_file
 
-    def request(self, flow):
-        self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
+    def get_full_url(self, request):
+        host_port = request.host
+        if request.method == 'CONNECT':
+            if request.port is not 443:
+                host_port = host_port + ':' + str(request.port)
+            host_port = 'https://' + host_port
+        else:
+            if request.scheme is not None:
+                host_port = request.url
+            else:
+                host_port = host_port + ":" + str(request.port)
 
+        return host_port
+
+    def create_har_entry_with_default_response(self, request):
         self.har_entry = self.generate_har_entry()
-        self.har_entry['pageRef'] = self.current_har_page['id']
-        self.har_entry['startedDateTime'] = \
-            datetime.fromtimestamp(flow.request.timestamp_start, timezone.utc).isoformat()
-
+        self.har_entry['pageRef'] = self.get_current_page_ref()
+        self.har_entry['startedDateTime'] = datetime.fromtimestamp(
+            request.timestamp_start, timezone.utc).isoformat()
         har_request = self.generate_har_entry_request()
-        har_request['method'] = flow.request.method
-        har_request['url'] = flow.request.url
-        har_request['httpVersion'] = flow.request.http_version
-        har_request['queryString'] = self.name_value(flow.request.query or {})
-        har_request['headersSize'] = len(str(flow.request.headers))
-
+        har_request['method'] = request.method
+        har_request['url'] = self.get_full_url(request)
+        har_request['httpVersion'] = request.http_version
+        har_request['queryString'] = self.name_value(request.query or {})
+        har_request['headersSize'] = len(str(request.headers))
         har_response = self.generate_har_entry_response_for_failure()
 
         self.har_entry['request'] = har_request
         self.har_entry['response'] = har_response
 
         self.har['log']['entries'].append(self.har_entry)
+
+    def request(self, flow):
+        self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
+
+        self.create_har_entry_with_default_response(flow.request)
 
         if HarCaptureTypes.REQUEST_COOKIES in self.har_capture_types:
             self.capture_request_cookies(flow)
@@ -478,7 +518,7 @@ class HarDumpAddOn:
             self.capture_request_content(flow.request)
 
         self.har_entry['request']['bodySize'] = \
-            len(flow.response.raw_content) if flow.response.raw_content else 0
+            len(flow.request.raw_content) if flow.request.raw_content else 0
 
     def capture_request_cookies(self, flow):
         self.har_entry['request']['cookies'] = \
@@ -488,21 +528,21 @@ class HarDumpAddOn:
         self.har_entry['request']['headers'] = \
             self.name_value(flow.request.headers)
 
-    def capture_request_content(self, flow):
+    def capture_request_content(self, request):
         params = [
             {"name": a, "value": b}
-            for a, b in flow.request.urlencoded_form.items(multi=True)
+            for a, b in request.urlencoded_form.items(multi=True)
         ]
         self.har_entry["request"]["postData"] = {
-            "mimeType": flow.request.headers.get("Content-Type", ""),
-            "text": flow.request.get_text(strict=False),
+            "mimeType": request.headers.get("Content-Type", ""),
+            "text": request.get_text(strict=False),
             "params": params
         }
 
     def response(self, flow):
-        """
-             Called when a server response has been received.
-        """
+        if 'WhiteListFiltered' in flow.metadata or 'BlackListFiltered' in flow.metadata:
+            return
+
         # -1 indicates that these values do not apply to current request
         self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
 
@@ -519,12 +559,6 @@ class HarDumpAddOn:
 
             SERVERS_SEEN.add(flow.server_conn)
 
-        # Calculate raw timings from timestamps. DNS timings can not be calculated
-        # for lack of a way to measure it. The same goes for HAR blocked.
-        # mitmproxy will open a server connection as soon as it receives the host
-        # and port from the client connection. So, the time spent waiting is actually
-        # spent waiting between request.timestamp_end and response.timestamp_start
-        # thus it correlates to HAR wait instead.
         timings_raw = {
             'send': flow.request.timestamp_end - flow.request.timestamp_start,
             'receive': flow.response.timestamp_end - flow.response.timestamp_start,
@@ -538,6 +572,8 @@ class HarDumpAddOn:
             k: int(1000 * v) if v != -1 else -1
             for k, v in timings_raw.items()
         }
+
+        timings['dns'] = self.har_entry['timings']['dns']
 
         # full_time is the sum of all timings.
         # Timings set to -1 will be ignored as per spec.
@@ -562,23 +598,23 @@ class HarDumpAddOn:
         if HarCaptureTypes.RESPONSE_HEADERS in self.har_capture_types:
             har_response["headers"] = self.name_value(flow.response.headers)
 
-        if flow.request.status in [300, 301, 302, 303, 307]:
-            har_response['redirectURL'] = flow.request.headers['Location']
+        if flow.response.status_code in [300, 301, 302, 303, 307]:
+            har_response['redirectURL'] = flow.response.headers['Location']
+
+        content = har_response['content']
+        content['size'] = response_body_size
+        content['compression'] = response_body_compression
+        content['mimeType'] = flow.response.headers.get('Content-Type', '')
 
         if HarCaptureTypes.RESPONSE_CONTENT in self.har_capture_types:
-            content = har_response['content']
-            content['size'] = response_body_size,
-            content['compression'] = response_body_compression,
-            content['mimeType'] = flow.response.headers.get('Content-Type', '')
-
             if strutils.is_mostly_bin(flow.response.content):
-                har_response["content"]["text"] = base64.b64encode(
-                    flow.response.content).decode()
-                har_response["content"]["encoding"] = "base64"
+                if HarCaptureTypes.RESPONSE_BINARY_CONTENT in self.har_capture_types:
+                    har_response["content"]["text"] = base64.b64encode(
+                        flow.response.content).decode()
+                    har_response["content"]["encoding"] = "base64"
             else:
                 har_response["content"]["text"] = flow.response.get_text(
                     strict=False)
-
 
         har_response["redirectURL"] = flow.response.headers.get('Location', '')
         har_response["headersSize"] = len(str(flow.response.headers))
@@ -590,12 +626,9 @@ class HarDumpAddOn:
 
         self.har_entry['timings'] = timings
 
-
-
         if flow.server_conn.connected():
-            self.har_entry["serverIPAddress"] = str(flow.server_conn.ip_address[0])
-
-        self.har["log"]["entries"].append(self.har_entry)
+            self.har_entry["serverIPAddress"] = str(
+                flow.server_conn.ip_address[0])
 
     def format_cookies(self, cookie_list):
         rv = []
@@ -636,6 +669,133 @@ class HarDumpAddOn:
             Convert (key, value) pairs to HAR format.
         """
         return [{"name": k, "value": v} for k, v in obj.items()]
+
+    def tcp_resolving_server_address_started(self, sever_conn):
+        self.dns_resolution_started_nanos = int(round(time.time() * 1000000))
+        self.connection_started_nanos = int(round(time.time() * 1000000))
+
+    def tcp_resolving_server_address_finished(self, sever_conn):
+        self.populate_dns_timings()
+
+    def http_proxy_to_server_request_started(self, flow):
+        self.send_started_nanos = time.time() * 1000000
+
+    def http_proxy_to_server_request_finished(self, flow):
+        self.send_finished_nanos = time.time() * 1000000
+        if self.send_started_nanos > 0:
+            self.har_entry['timings']['send'] = self.send_finished_nanos - self.send_started_nanos
+        else:
+            self.har_entry['timings']['send'] = 0
+
+    def http_server_to_proxy_response_receiving(self, flow):
+        self.response_receive_started_nanos = time.time() * 1000000
+
+    def http_server_to_proxy_response_received(self, flow):
+        """"""
+
+    def error(self, flow):
+        req_host_port = flow.request.host
+        if flow.request.port != 80 and flow.request.port != 443:
+            req_host_port = req_host_port + ':' + str(flow.request.port)
+        original_error = HarDumpAddOn.get_original_exception(flow.error)
+
+        if isinstance(original_error, ConnectionRefusedError):
+            self.proxy_to_server_resolution_failed(flow, req_host_port,
+                                                   original_error)
+
+        if isinstance(original_error, TcpTimeout):
+            self.server_to_proxy_response_timed_out(flow, req_host_port,
+                                                    original_error)
+
+        else:
+            self.proxy_to_server_connection_failed(flow, req_host_port,
+                                                   original_error)
+
+    def proxy_to_server_resolution_failed(self, flow, req_host_port,
+        original_error):
+        msg = RESOLUTION_FAILED_ERROR_MESSAGE + req_host_port
+        self.create_har_entry_for_failed_connect(flow.request, msg)
+        self.populate_dns_timings()
+        self.populate_server_ip_address(flow, original_error)
+
+        self.har_entry['time'] = self.calculate_total_elapsed_time()
+
+    def proxy_to_server_connection_failed(self, flow, req_host_port,
+        original_error):
+        msg = CONNECTION_FAILED_ERROR_MESSAGE
+        self.create_har_entry_for_failed_connect(flow.request, msg)
+        self.populate_timings_for_failed_connect()
+        self.populate_server_ip_address(flow, original_error)
+
+        self.har_entry['time'] = self.calculate_total_elapsed_time()
+
+    def server_to_proxy_response_timed_out(self, flow, req_host_port,
+        original_error):
+        msg = RESPONSE_TIMED_OUT_ERROR_MESSAGE
+        self.create_har_entry_for_failed_connect(flow.request, msg)
+        self.populate_timings_for_failed_connect()
+        self.populate_server_ip_address(flow, original_error)
+
+        current_time_nanos = time.time() * 1000000
+
+        if self.send_started_nanos > 0 and self.send_finished_nanos == 0:
+            self.har_entry['timings']['send'] = current_time_nanos - self.send_started_nanos
+
+        elif self.send_finished_nanos > 0 and self.response_receive_started_nanos == 0:
+            self.har_entry['timings']['wait'] = current_time_nanos - self.send_finished_nanos
+
+        elif self.response_receive_started_nanos > 0:
+            self.har_entry['timings']['receive'] = current_time_nanos - self.response_receive_started_nanos
+
+
+        self.har_entry['time'] = self.calculate_total_elapsed_time()
+
+    def calculate_total_elapsed_time(self):
+        timings = self.har_entry['timings']
+        result = (0 if timings['blocked'] == -1 else timings['blocked']) + \
+                 (0 if timings['dns'] == -1 else timings['dns']) + \
+                 (0 if timings['connect'] == -1 else timings['connect']) + \
+                 (0 if timings['send'] == -1 else timings['send']) + \
+                 (0 if timings['wait'] == -1 else timings['wait']) + \
+                 (0 if timings['receive'] == -1 else timings['receive'])
+        return result
+
+    def create_har_entry_for_failed_connect(self, request, msg):
+        if self.har_entry is None:
+            self.create_har_entry_with_default_response(request)
+
+        self.har_entry['response']['_errorMessage'] = msg
+
+    def populate_timings_for_failed_connect(self):
+        if self.connection_started_nanos > 0:
+            self.har_entry['timings']['connect'] = int(
+                round(time.time() * 1000000)) - self.connection_started_nanos
+        self.populate_dns_timings()
+
+    def populate_dns_timings(self):
+        if self.dns_resolution_started_nanos > 0:
+            dns_nanos = int(round(
+                time.time() * 1000000)) - self.dns_resolution_started_nanos
+            dns_ms = int(dns_nanos / 1000)
+            self.har_entry['timings']['dns'] = dns_ms
+
+    def populate_server_ip_address(self, flow, original_error):
+        if isinstance(original_error, ConnectionRefusedError) \
+            or isinstance(original_error, TcpTimeout):
+            if flow.server_conn is not None and flow.server_conn.ip_address is not None:
+                self.har_entry['serverIPAddress'] = str(
+                    flow.server_conn.ip_address[0])
+
+
+    @staticmethod
+    def get_original_exception(flow_error):
+        result = flow_error.cause
+        while True:
+            if hasattr(result, '__cause__') and result.__cause__ is not None:
+                result = result.__cause__
+            else:
+                break
+        return result
 
 
 addons = [

@@ -181,5 +181,9 @@ class Options(optmanager.OptManager):
             TLS key size for certificates and CA.
             """
         )
+        self.add_option(
+            "connection_idle_seconds", int, False,
+            ""
+        )
 
         self.update(**kwargs)
