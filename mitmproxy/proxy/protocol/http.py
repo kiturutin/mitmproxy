@@ -350,8 +350,8 @@ class HttpLayer(base.Layer):
                     else:
                         self.send_request_body(f.request, [f.request.data.content])
                     self.channel.ask("http_proxy_to_server_request_finished", f)
-                    self.channel.ask("http_server_to_proxy_response_receiving", f)
                     f.response = self.read_response_headers()
+                    self.channel.ask("http_server_to_proxy_response_receiving", f)
 
                 try:
                     get_response()

@@ -3,8 +3,6 @@ import base64
 import typing
 import tempfile
 
-import mitmproxy.tcp
-
 from datetime import datetime
 from datetime import timezone
 import dateutil.parser
@@ -13,11 +11,8 @@ from enum import Enum, auto
 
 import falcon
 import time
-from mitmproxy import ctx
 
 from mitmproxy import connections
-from mitmproxy import version
-from mitmproxy.exceptions import TcpTimeout
 from mitmproxy.utils import strutils
 from mitmproxy.net.http import cookies
 
@@ -27,11 +22,6 @@ SERVERS_SEEN: typing.Set[connections.ServerConnection] = set()
 
 DEFAULT_PAGE_REF = "Default"
 DEFAULT_PAGE_TITLE = "Default"
-
-RESOLUTION_FAILED_ERROR_MESSAGE = "Unable to resolve host: "
-CONNECTION_FAILED_ERROR_MESSAGE = "Unable to connect to host"
-RESPONSE_TIMED_OUT_ERROR_MESSAGE = "Response timed out"
-
 
 class HarCaptureTypes(Enum):
     REQUEST_HEADERS = auto()
@@ -436,7 +426,7 @@ class HarDumpAddOn:
             if 'startedDateTime' in default_har_page:
                 default_har_page['pageTimings']['onLoad'] = \
                     (
-                        datetime.utcnow() - dateutil.parser.isoparse(
+                            datetime.utcnow() - dateutil.parser.isoparse(
                         default_har_page['startedDateTime'])
                     ).total_seconds() * 1000
 
@@ -559,24 +549,8 @@ class HarDumpAddOn:
 
             SERVERS_SEEN.add(flow.server_conn)
 
-        timings_raw = {
-            'send': flow.request.timestamp_end - flow.request.timestamp_start,
-            'receive': flow.response.timestamp_end - flow.response.timestamp_start,
-            'wait': flow.response.timestamp_start - flow.request.timestamp_end,
-            'connect': connect_time,
-            'ssl': ssl_time,
-        }
-
-        # HAR timings are integers in ms, so we re-encode the raw timings to that format.
-        timings = {
-            k: int(1000 * v) if v != -1 else -1
-            for k, v in timings_raw.items()
-        }
-
+        timings = self.calculate_timings(connect_time, flow, ssl_time)
         timings['dns'] = self.har_entry['timings']['dns']
-
-        # full_time is the sum of all timings.
-        # Timings set to -1 will be ignored as per spec.
         full_time = sum(v for v in timings.values() if v > -1)
 
         # Response body size and encoding
@@ -630,6 +604,21 @@ class HarDumpAddOn:
             self.har_entry["serverIPAddress"] = str(
                 flow.server_conn.ip_address[0])
 
+    def calculate_timings(self, connect_time, flow, ssl_time):
+        timings_raw = {
+            'send': flow.request.timestamp_end - flow.request.timestamp_start,
+            'receive': flow.response.timestamp_end - flow.response.timestamp_start,
+            'wait': flow.response.timestamp_start - flow.request.timestamp_end,
+            'connect': connect_time,
+            'ssl': ssl_time,
+        }
+        # HAR timings are integers in ms, so we re-encode the raw timings to that format.
+        timings = {
+            k: int(1000 * v) if v != -1 else -1
+            for k, v in timings_raw.items()
+        }
+        return timings
+
     def format_cookies(self, cookie_list):
         rv = []
 
@@ -669,134 +658,6 @@ class HarDumpAddOn:
             Convert (key, value) pairs to HAR format.
         """
         return [{"name": k, "value": v} for k, v in obj.items()]
-
-    def tcp_resolving_server_address_started(self, sever_conn):
-        self.dns_resolution_started_nanos = int(round(time.time() * 1000000))
-        self.connection_started_nanos = int(round(time.time() * 1000000))
-
-    def tcp_resolving_server_address_finished(self, sever_conn):
-        self.populate_dns_timings()
-
-    def http_proxy_to_server_request_started(self, flow):
-        self.send_started_nanos = time.time() * 1000000
-
-    def http_proxy_to_server_request_finished(self, flow):
-        self.send_finished_nanos = time.time() * 1000000
-        if self.send_started_nanos > 0:
-            self.har_entry['timings']['send'] = self.send_finished_nanos - self.send_started_nanos
-        else:
-            self.har_entry['timings']['send'] = 0
-
-    def http_server_to_proxy_response_receiving(self, flow):
-        self.response_receive_started_nanos = time.time() * 1000000
-
-    def http_server_to_proxy_response_received(self, flow):
-        """"""
-
-    def error(self, flow):
-        req_host_port = flow.request.host
-        if flow.request.port != 80 and flow.request.port != 443:
-            req_host_port = req_host_port + ':' + str(flow.request.port)
-        original_error = HarDumpAddOn.get_original_exception(flow.error)
-
-        if isinstance(original_error, ConnectionRefusedError):
-            self.proxy_to_server_resolution_failed(flow, req_host_port,
-                                                   original_error)
-
-        if isinstance(original_error, TcpTimeout):
-            self.server_to_proxy_response_timed_out(flow, req_host_port,
-                                                    original_error)
-
-        else:
-            self.proxy_to_server_connection_failed(flow, req_host_port,
-                                                   original_error)
-
-    def proxy_to_server_resolution_failed(self, flow, req_host_port,
-        original_error):
-        msg = RESOLUTION_FAILED_ERROR_MESSAGE + req_host_port
-        self.create_har_entry_for_failed_connect(flow.request, msg)
-        self.populate_dns_timings()
-        self.populate_server_ip_address(flow, original_error)
-
-        self.har_entry['time'] = self.calculate_total_elapsed_time()
-
-    def proxy_to_server_connection_failed(self, flow, req_host_port,
-        original_error):
-        msg = CONNECTION_FAILED_ERROR_MESSAGE
-        self.create_har_entry_for_failed_connect(flow.request, msg)
-        self.populate_timings_for_failed_connect()
-        self.populate_server_ip_address(flow, original_error)
-
-        self.har_entry['time'] = self.calculate_total_elapsed_time()
-
-    def server_to_proxy_response_timed_out(self, flow, req_host_port,
-        original_error):
-        msg = RESPONSE_TIMED_OUT_ERROR_MESSAGE
-        self.create_har_entry_for_failed_connect(flow.request, msg)
-        self.populate_timings_for_failed_connect()
-        self.populate_server_ip_address(flow, original_error)
-
-        current_time_nanos = time.time() * 1000000
-
-        if self.send_started_nanos > 0 and self.send_finished_nanos == 0:
-            self.har_entry['timings']['send'] = current_time_nanos - self.send_started_nanos
-
-        elif self.send_finished_nanos > 0 and self.response_receive_started_nanos == 0:
-            self.har_entry['timings']['wait'] = current_time_nanos - self.send_finished_nanos
-
-        elif self.response_receive_started_nanos > 0:
-            self.har_entry['timings']['receive'] = current_time_nanos - self.response_receive_started_nanos
-
-
-        self.har_entry['time'] = self.calculate_total_elapsed_time()
-
-    def calculate_total_elapsed_time(self):
-        timings = self.har_entry['timings']
-        result = (0 if timings['blocked'] == -1 else timings['blocked']) + \
-                 (0 if timings['dns'] == -1 else timings['dns']) + \
-                 (0 if timings['connect'] == -1 else timings['connect']) + \
-                 (0 if timings['send'] == -1 else timings['send']) + \
-                 (0 if timings['wait'] == -1 else timings['wait']) + \
-                 (0 if timings['receive'] == -1 else timings['receive'])
-        return result
-
-    def create_har_entry_for_failed_connect(self, request, msg):
-        if self.har_entry is None:
-            self.create_har_entry_with_default_response(request)
-
-        self.har_entry['response']['_errorMessage'] = msg
-
-    def populate_timings_for_failed_connect(self):
-        if self.connection_started_nanos > 0:
-            self.har_entry['timings']['connect'] = int(
-                round(time.time() * 1000000)) - self.connection_started_nanos
-        self.populate_dns_timings()
-
-    def populate_dns_timings(self):
-        if self.dns_resolution_started_nanos > 0:
-            dns_nanos = int(round(
-                time.time() * 1000000)) - self.dns_resolution_started_nanos
-            dns_ms = int(dns_nanos / 1000)
-            self.har_entry['timings']['dns'] = dns_ms
-
-    def populate_server_ip_address(self, flow, original_error):
-        if isinstance(original_error, ConnectionRefusedError) \
-            or isinstance(original_error, TcpTimeout):
-            if flow.server_conn is not None and flow.server_conn.ip_address is not None:
-                self.har_entry['serverIPAddress'] = str(
-                    flow.server_conn.ip_address[0])
-
-
-    @staticmethod
-    def get_original_exception(flow_error):
-        result = flow_error.cause
-        while True:
-            if hasattr(result, '__cause__') and result.__cause__ is not None:
-                result = result.__cause__
-            else:
-                break
-        return result
-
 
 addons = [
     HarDumpAddOn()
