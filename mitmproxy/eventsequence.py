@@ -18,6 +18,9 @@ Events = frozenset([
     "tcp_end",
     "tcp_resolving_server_address_started",
     "tcp_resolving_server_address_finished",
+    #SSL
+    "ssl_handshake_started",
+    "ssl_handshake_finished",
     # HTTP
     "http_connect",
     "request",

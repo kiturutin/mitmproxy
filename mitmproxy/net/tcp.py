@@ -18,6 +18,7 @@ from OpenSSL import SSL
 from mitmproxy import certs
 from mitmproxy import exceptions
 from mitmproxy.coretypes import basethread
+from mitmproxy.net.timeout_helper import TimeoutHelper
 
 socket_fileobject = socket.SocketIO
 
@@ -393,12 +394,20 @@ class TCPClient(_Connection):
             self.connection.set_tlsext_host_name(sni.encode("idna"))
         self.connection.set_connect_state()
         try:
-            self.connection.do_handshake()
+            idle_timeout = ctx.options.connection_idle_seconds
+            if idle_timeout != -1:
+                timeout = idle_timeout
+            else:
+                timeout = 60
+            self.channel.ask("ssl_handshake_started", self)
+            TimeoutHelper.wrap_with_timeout(self.connection.do_handshake, timeout)
         except SSL.Error as v:
             if self.ssl_verification_error:
                 raise self.ssl_verification_error
             else:
                 raise exceptions.TlsException("SSL handshake error: %s" % repr(v))
+        finally:
+            self.channel.ask("ssl_handshake_finished", self)
 
         self.cert = certs.Cert(self.connection.get_peer_certificate())
 

@@ -35,6 +35,7 @@ class HttpConnectCaptureAddOn:
         self.send_started_nanos = 0
         self.send_finished_nanos = 0
         self.response_receive_started_nanos = 0
+        self.ssl_handshake_started_nanos = 0
 
     # TCP Callbacks
 
@@ -45,6 +46,10 @@ class HttpConnectCaptureAddOn:
         self.dns_resolution_started_nanos = int(round(time.time() * 1000000))
         self.connection_started_nanos = int(round(time.time() * 1000000))
 
+
+    # SSL Callbacks
+    def ssl_handshake_started(self, flow):
+        self.ssl_handshake_started_nanos = int(round(time.time() * 1000000))
 
     # HTTP Callbacks
 

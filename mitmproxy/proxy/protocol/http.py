@@ -212,7 +212,10 @@ class HttpLayer(base.Layer):
         ) as e:
             # HTTPS tasting means that ordinary errors like resolution
             # and connection errors can happen here.
-            self.send_error_response(502, repr(e))
+            if isinstance(e, TcpTimeout):
+                self.send_error_response(504, repr(e))
+            else:
+                self.send_error_response(502, repr(e))
             f.error = flow.Error(msg=str(e), err=e)
             self.channel.ask("error", f)
             return False
