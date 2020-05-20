@@ -185,5 +185,9 @@ class Options(optmanager.OptManager):
             "connection_idle_seconds", int, False,
             ""
         )
+        self.add_option(
+            "dns_resolving_delay_ms", int, False,
+            ""
+        )
 
         self.update(**kwargs)

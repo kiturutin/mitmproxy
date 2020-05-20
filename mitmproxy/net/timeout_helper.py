@@ -14,5 +14,3 @@ class TimeoutHelper:
             except (WantReadError, WantWriteError):
                 if timeout is None or time() - start >= timeout:
                     raise TcpTimeout
-                else:
-                    print()

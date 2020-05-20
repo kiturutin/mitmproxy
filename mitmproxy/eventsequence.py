@@ -11,6 +11,7 @@ Events = frozenset([
     "clientdisconnect",
     "serverconnect",
     "serverdisconnect",
+    "proxy_to_server_connection_succeeded",
     # TCP
     "tcp_start",
     "tcp_message",

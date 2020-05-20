@@ -469,6 +469,8 @@ class TCPClient(_Connection):
         try:
             self.channel.ask("tcp_resolving_server_address_started", self)
             connection = self.create_connection()
+            if ctx.options.dns_resolving_delay_ms > 0:
+                time.sleep(ctx.options.dns_resolving_delay_ms / 1000)
         except (socket.error, IOError) as err:
             raise exceptions.TcpException(
                 'Error connecting to "%s": %s' %

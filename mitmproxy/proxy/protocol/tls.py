@@ -356,6 +356,7 @@ class TlsLayer(base.Layer):
         try:
             self.ctx.connect()
             self._establish_tls_with_server()
+            self.ctx.channel.ask("proxy_to_server_connection_succeeded", self)
         except Exception:
             # If establishing TLS with the server fails, we try to establish TLS with the client nonetheless
             # to send an error message over TLS.
