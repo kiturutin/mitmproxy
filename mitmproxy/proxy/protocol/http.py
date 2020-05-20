@@ -236,7 +236,10 @@ class HttpLayer(base.Layer):
             f.response.data.content = b"".join(
                 self.read_response_body(f.request, f.response)
             )
+
+        self.channel.ask("response_from_upstream_proxy", f)
         self.send_response(f.response)
+
         if is_ok(f.response.status_code):
             layer = UpstreamConnectLayer(self, f.request)
             return layer()

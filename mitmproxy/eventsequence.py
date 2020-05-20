@@ -33,6 +33,8 @@ Events = frozenset([
     "http_server_to_proxy_response_receiving",
     "http_server_to_proxy_response_received",
     "error",
+    # UPSTREAM
+    "response_from_upstream_proxy",
     # WebSocket
     "websocket_handshake",
     "websocket_start",

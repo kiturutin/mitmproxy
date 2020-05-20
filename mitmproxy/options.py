@@ -189,5 +189,9 @@ class Options(optmanager.OptManager):
             "dns_resolving_delay_ms", int, False,
             ""
         )
+        self.add_option(
+            "upstream_proxy_credentials", str, "",
+            ""
+        )
 
         self.update(**kwargs)
