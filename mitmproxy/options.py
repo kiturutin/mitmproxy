@@ -193,5 +193,9 @@ class Options(optmanager.OptManager):
             "upstream_proxy_credentials", str, "",
             ""
         )
+        self.add_option(
+            "upstream_proxy_exception_hosts", Sequence[str], [],
+            ""
+        )
 
         self.update(**kwargs)
