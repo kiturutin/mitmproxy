@@ -7,6 +7,8 @@ from datetime import datetime
 from datetime import timezone
 import dateutil.parser
 
+import copy
+
 import asyncio
 
 from mitmproxy import ctx
@@ -175,7 +177,6 @@ class HarDumpAddOn:
     def __init__(self):
         self.num = 0
         self.har = None
-        self.har_entry = None
         self.har_page_count = 0
         self.har_capture_types = []
         self.current_har_page = None
@@ -253,13 +254,13 @@ class HarDumpAddOn:
 
     def generate_har_timings(self):
         return {
-            "blocked": -1,
-            "dns": -1,
-            "connect": -1,
-            "ssl": -1,
-            "send": 0,
-            "wait": 0,
-            "receive": 0,
+            "blockedNanos": -1,
+            "dnsNanos": -1,
+            "connectNanos": -1,
+            "sslNanos": -1,
+            "sendNanos": 0,
+            "waitNanos": 0,
+            "receiveNanos": 0,
             "comment": ""
         }
 
@@ -387,6 +388,7 @@ class HarDumpAddOn:
         return default_page
 
     def add_default_page(self):
+        self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, False)
         new_page = self.generate_new_har_page()
         new_page['title'] = DEFAULT_PAGE_REF
         new_page['startedDateTime'] = datetime.utcnow().isoformat()
@@ -401,9 +403,12 @@ class HarDumpAddOn:
         return None
 
     def new_har(self, initial_page_ref, initial_page_title, create_page=False):
-        ctx.log.info(
-            'Creating new har with initial page ref: {}, title: {}'.
-                format(initial_page_ref, initial_page_title))
+        if create_page:
+            ctx.log.info(
+                'Creating new har with initial page ref: {}, title: {}'.
+                    format(initial_page_ref, initial_page_title))
+        else:
+            ctx.log.info('Creating new har without initial page')
 
         old_har = self.end_har()
 
@@ -452,6 +457,8 @@ class HarDumpAddOn:
                     ).total_seconds() * 1000
 
     def add_har_page(self, pageRef, pageTitle):
+        ctx.log.debug('Adding har page with ref: {} and title: {}'.format(pageRef, pageTitle))
+
         har_page = {
             "id": pageRef,
             "title:": pageTitle,
@@ -501,23 +508,29 @@ class HarDumpAddOn:
             return self.http_connect_timings.pop(client_conn, None)
         return None
 
-    def create_har_entry_with_default_response(self, request):
-        self.har_entry = self.generate_har_entry()
-        self.har_entry['pageRef'] = self.get_current_page_ref()
-        self.har_entry['startedDateTime'] = datetime.fromtimestamp(
-            request.timestamp_start, timezone.utc).isoformat()
+    def populate_har_entry_with_default_response(self, flow):
+        full_url = self.get_full_url(flow.request)
+
+        ctx.log.debug('Creating new har entry for request: {}'.format(full_url))
+
+        har_entry = flow.server_conn.currentHarEntry
+
+        har_entry['pageref'] = self.get_current_page_ref()
+        har_entry['startedDateTime'] = datetime.fromtimestamp(
+            flow.request.timestamp_start, timezone.utc).isoformat()
         har_request = self.generate_har_entry_request()
-        har_request['method'] = request.method
-        har_request['url'] = self.get_full_url(request)
-        har_request['httpVersion'] = request.http_version
-        har_request['queryString'] = self.name_value(request.query or {})
-        har_request['headersSize'] = len(str(request.headers))
+        har_request['method'] = flow.request.method
+        har_request['url'] = full_url
+        har_request['httpVersion'] = flow.request.http_version
+        har_request['queryString'] = self.name_value(flow.request.query or {})
+        har_request['headersSize'] = len(str(flow.request.headers))
         har_response = self.generate_har_entry_response_for_failure()
 
-        self.har_entry['request'] = har_request
-        self.har_entry['response'] = har_response
+        har_entry['request'] = har_request
+        har_entry['response'] = har_response
 
-        self.har['log']['entries'].append(self.har_entry)
+    def append_har_entry(self, har_entry):
+        self.har['log']['entries'].append(har_entry)
 
     def request(self, flow):
         if 'WhiteListFiltered' in flow.metadata or 'BlackListFiltered' in flow.metadata:
@@ -526,11 +539,12 @@ class HarDumpAddOn:
         req_url = 'none'
         if flow.request is not None:
             req_url = flow.request.url
-        ctx.log.info('Incoming request, url: {}'.format(req_url))
+
+        ctx.log.debug('Incoming request, url: {}'.format(req_url))
 
         self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
 
-        self.create_har_entry_with_default_response(flow.request)
+        self.populate_har_entry_with_default_response(flow)
 
         if HarCaptureTypes.REQUEST_COOKIES in self.har_capture_types:
             self.capture_request_cookies(flow)
@@ -539,42 +553,48 @@ class HarDumpAddOn:
             self.capture_request_headers(flow)
 
         if HarCaptureTypes.RESPONSE_CONTENT in self.har_capture_types:
-            self.capture_request_content(flow.request)
+            self.capture_request_content(flow)
 
-        self.har_entry['request']['bodySize'] = \
+        har_entry = flow.server_conn.currentHarEntry
+        har_entry['request']['bodySize'] = \
             len(flow.request.raw_content) if flow.request.raw_content else 0
 
         connect_timing = self.consume_http_connect_timing(flow.client_conn)
         if connect_timing is not None:
-            self.har_entry['timings']['ssl'] = connect_timing['sslHandshakeTimeNanos']
-            self.har_entry['timings']['connect'] = connect_timing['connectTimeNanos']
-            self.har_entry['timings']['blocked'] = connect_timing['blockedTimeNanos']
-            self.har_entry['timings']['dns'] = connect_timing['dnsTimeNanos']
+            har_entry['timings']['sslNanos'] = connect_timing['sslHandshakeTimeNanos']
+            har_entry['timings']['connectNanos'] = connect_timing['connectTimeNanos']
+            har_entry['timings']['blockedNanos'] = connect_timing['blockedTimeNanos']
+            har_entry['timings']['dnsNanos'] = connect_timing['dnsTimeNanos']
 
     def capture_request_cookies(self, flow):
-        self.har_entry['request']['cookies'] = \
+        har_entry = flow.metadata['currentHarEntry']
+        har_entry['request']['cookies'] = \
             self.format_request_cookies(flow.request.cookies.fields)
 
     def capture_request_headers(self, flow):
-        self.har_entry['request']['headers'] = \
+        har_entry = flow.metadata['currentHarEntry']
+        har_entry['request']['headers'] = \
             self.name_value(flow.request.headers)
 
-    def capture_request_content(self, request):
+    def capture_request_content(self, flow):
+        har_entry = flow.metadata['currentHarEntry']
         params = [
             {"name": a, "value": b}
-            for a, b in request.urlencoded_form.items(multi=True)
+            for a, b in flow.request.urlencoded_form.items(multi=True)
         ]
-        self.har_entry["request"]["postData"] = {
-            "mimeType": request.headers.get("Content-Type", ""),
-            "text": request.get_text(strict=False),
+        har_entry["request"]["postData"] = {
+            "mimeType": flow.request.headers.get("Content-Type", ""),
+            "text": flow.request.get_text(strict=False),
             "params": params
         }
 
     def response(self, flow):
-        ctx.log.info('Incoming response for request to url: {}'.format(flow.request.url))
+        har_entry = flow.server_conn.currentHarEntry
+
+        ctx.log.debug('Incoming response for request to url: {}'.format(flow.request.url))
 
         if 'WhiteListFiltered' in flow.metadata or 'BlackListFiltered' in flow.metadata:
-            ctx.log.info('Black/White list filtered, return nothing.')
+            ctx.log.debug('Black/White list filtered, return nothing.')
             return
 
         # -1 indicates that these values do not apply to current request
@@ -594,7 +614,7 @@ class HarDumpAddOn:
             SERVERS_SEEN.add(flow.server_conn)
 
         timings = self.calculate_timings(connect_time, flow, ssl_time)
-        timings['dns'] = int(self.har_entry['timings']['dns'])
+        timings['dnsNanos'] = int(har_entry['timings']['dnsNanos'])
 
         full_time = sum(v for v in timings.values() if v > -1)
 
@@ -639,31 +659,30 @@ class HarDumpAddOn:
         har_response["headersSize"] = len(str(flow.response.headers))
         har_response["bodySize"] = response_body_size
 
-        self.har_entry['response'] = har_response
-        self.har_entry['time'] = self.nano_to_ms(full_time)
-        self.har_entry['pageref'] = self.get_current_page_ref()
+        har_entry['response'] = har_response
+        har_entry['time'] = self.nano_to_ms(full_time)
+        har_entry['pageref'] = self.get_current_page_ref()
 
-        self.har_entry['timings'] = timings
+        har_entry['timings'] = timings
 
         if flow.server_conn.connected():
-            self.har_entry["serverIPAddress"] = str(
+            har_entry["serverIPAddress"] = str(
                 flow.server_conn.ip_address[0])
 
     def calculate_timings(self, connect_time, flow, ssl_time):
         timings_raw = {
-            'send': flow.request.timestamp_end - flow.request.timestamp_start,
-            'receive': flow.response.timestamp_end - flow.response.timestamp_start,
-            'wait': flow.response.timestamp_start - flow.request.timestamp_end,
-            'connect': connect_time,
-            'ssl': ssl_time,
+            'sendNanos': flow.request.timestamp_end - flow.request.timestamp_start,
+            'receiveNanos': flow.response.timestamp_end - flow.response.timestamp_start,
+            'waitNanos': flow.response.timestamp_start - flow.request.timestamp_end,
+            'connectNanos': connect_time,
+            'sslNanos': ssl_time,
         }
         # HAR timings are integers in ms, so we re-encode the raw timings to that format.
-        # In HAR Timings parser we expect input metrincs in Nanos
-        timings = {
+        # In HAR Timings parser we expect input metrics in Nanos
+        return {
             k: int(self.sec_to_nano(v)) if v != -1 else -1
             for k, v in timings_raw.items()
         }
-        return timings
 
     def format_cookies(self, cookie_list):
         rv = []

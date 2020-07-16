@@ -666,11 +666,11 @@ class HarDumpAddOn:
         """
         return [{"name": k, "value": v} for k, v in obj.items()]
 
-    def tcp_resolving_server_address_started(self, sever_conn):
+    def tcp_resolving_server_address_started(self, server_conn):
         self.dns_resolution_started_nanos = int(round(time.time() * 1000000))
         self.connection_started_nanos = int(round(time.time() * 1000000))
 
-    def tcp_resolving_server_address_finished(self, sever_conn):
+    def tcp_resolving_server_address_finished(self, server_conn):
         self.populate_dns_timings()
 
     def error(self, flow):
