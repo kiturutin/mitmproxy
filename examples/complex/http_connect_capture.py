@@ -125,6 +125,8 @@ class HttpConnectCaptureAddOn:
             req_host_port = req_host_port + ':' + str(flow.request.port)
         original_error = HttpConnectCaptureAddOn.get_original_exception(flow.error)
 
+        self.har_dump_addon.populate_har_entry_with_default_response(flow)
+
         if 'Name or service not known' in str(original_error):
             self.proxy_to_server_resolution_failed(flow, req_host_port, original_error)
         elif isinstance(original_error, TcpTimeout):
@@ -195,9 +197,6 @@ class HttpConnectCaptureAddOn:
 
     def create_har_entry_for_failed_connect(self, flow, msg):
         har_entry = self.get_har_entry(flow.server_conn)
-        if not har_entry:
-            self.har_dump_addon.populate_har_entry_with_default_response(flow)
-
         har_entry['response']['_errorMessage'] = msg
 
     def calculate_total_elapsed_time(self, flow):

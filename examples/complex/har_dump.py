@@ -516,8 +516,7 @@ class HarDumpAddOn:
         har_entry = flow.server_conn.currentHarEntry
 
         har_entry['pageref'] = self.get_current_page_ref()
-        har_entry['startedDateTime'] = datetime.fromtimestamp(
-            flow.request.timestamp_start, timezone.utc).isoformat()
+        har_entry['startedDateTime'] = datetime.fromtimestamp(flow.request.timestamp_start, timezone.utc).isoformat()
         har_request = self.generate_har_entry_request()
         har_request['method'] = flow.request.method
         har_request['url'] = full_url
@@ -536,6 +535,8 @@ class HarDumpAddOn:
         if 'WhiteListFiltered' in flow.metadata or 'BlackListFiltered' in flow.metadata:
             return
 
+        self.populate_har_entry_with_default_response(flow)
+
         req_url = 'none'
         if flow.request is not None:
             req_url = flow.request.url
@@ -543,8 +544,6 @@ class HarDumpAddOn:
         ctx.log.debug('Incoming request, url: {}'.format(req_url))
 
         self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
-
-        self.populate_har_entry_with_default_response(flow)
 
         if HarCaptureTypes.REQUEST_COOKIES in self.har_capture_types:
             self.capture_request_cookies(flow)
