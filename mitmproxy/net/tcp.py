@@ -465,9 +465,9 @@ class TCPClient(_Connection):
         else:
             raise socket.error("getaddrinfo returns an empty list")  # pragma: no cover
 
-    def connect(self):
+    def connect(self, flow):
         try:
-            self.channel.ask("tcp_resolving_server_address_started", self)
+            self.channel.ask("tcp_resolving_server_address_started", flow)
             connection = self.create_connection()
             if ctx.options.dns_resolving_delay_ms > 0:
                 time.sleep(2)
@@ -477,7 +477,7 @@ class TCPClient(_Connection):
                 (self.address[0], err)
             ) from err
         finally:
-            self.channel.ask("tcp_resolving_server_address_finished", self)
+            self.channel.ask("tcp_resolving_server_address_finished", flow)
         self.connection = connection
         self.source_address = connection.getsockname()
         self.ip_address = connection.getpeername()

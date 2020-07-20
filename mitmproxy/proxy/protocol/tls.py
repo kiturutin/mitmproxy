@@ -294,9 +294,9 @@ class TlsLayer(base.Layer):
         else:
             return "TlsLayer(inactive)"
 
-    def connect(self):
+    def connect(self, flow):
         if not self.server_conn.connected():
-            self.ctx.connect()
+            self.ctx.connect(flow)
         if self._server_tls and not self.server_conn.tls_established:
             self._establish_tls_with_server()
 

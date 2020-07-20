@@ -67,10 +67,10 @@ class HttpConnectCaptureAddOn:
         else:
             self.get_http_connect_timing()['dnsTimeNanos'] = 0
 
-    def tcp_resolving_server_address_started(self, server_conn):
+    def tcp_resolving_server_address_started(self, flow):
         self.dns_resolution_started_nanos = int(round(self.now_time_nanos()))
         self.connection_started_nanos = int(round(self.now_time_nanos()))
-        self.proxy_to_server_resolution_started()
+        self.proxy_to_server_resolution_started(flow)
 
     # SSL Callbacks
     def ssl_handshake_started(self, flow):
@@ -101,7 +101,7 @@ class HttpConnectCaptureAddOn:
         """"""
 
     # PROXY Callbacks
-    def proxy_to_server_resolution_started(self):
+    def proxy_to_server_resolution_started(self, flow):
         self.get_http_connect_timing()['blockedTimeNanos'] = 0
 
     def proxy_to_server_connection_succeeded(self, f):
@@ -120,12 +120,14 @@ class HttpConnectCaptureAddOn:
             self.get_http_connect_timing()['sslHandshakeTimeNanos'] = 0
 
     def error(self, flow):
+        ctx.log.debug('Error handling for request: {}'.format(str(flow)))
+
         req_host_port = flow.request.host
         if flow.request.port != 80:
             req_host_port = req_host_port + ':' + str(flow.request.port)
         original_error = HttpConnectCaptureAddOn.get_original_exception(flow.error)
 
-        self.har_dump_addon.populate_har_entry_with_default_response(flow)
+        self.har_dump_addon.populate_har_entry(flow)
 
         if 'Name or service not known' in str(original_error):
             self.proxy_to_server_resolution_failed(flow, req_host_port, original_error)
@@ -212,7 +214,7 @@ class HttpConnectCaptureAddOn:
     def get_har_entry(self, server_conn):
         return server_conn.currentHarEntry
 
-    def get_http_connect_timing(self):
+    def get_http_connect_timing(self, flow):
         if self.http_connect_timing is None:
             self.http_connect_timing = self.generate_http_connect_timing()
         return self.http_connect_timing

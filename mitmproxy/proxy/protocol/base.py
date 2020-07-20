@@ -155,7 +155,7 @@ class ServerConnectionMixin:
 
         self.server_conn = self.__make_server_conn(address)
 
-    def connect(self):
+    def connect(self, flow):
         """
         Establishes a server connection.
         Must not be called if there is an existing connection.
@@ -166,7 +166,7 @@ class ServerConnectionMixin:
         if not self.server_conn.address:
             raise exceptions.ProtocolException("Cannot connect to server, no server address given.")
         try:
-            self.server_conn.connect()
+            self.server_conn.connect(flow)
             self.log("serverconnect", "debug", [repr(self.server_conn.address)])
             self.channel.ask("serverconnect", self.server_conn)
         except exceptions.TcpException as e:

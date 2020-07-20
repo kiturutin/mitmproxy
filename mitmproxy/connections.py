@@ -263,9 +263,9 @@ class ServerConnection(tcp.TCPClient, stateobject.StateObject):
             via=None
         ))
 
-    def connect(self):
+    def connect(self, flow):
         self.timestamp_start = time.time()
-        tcp.TCPClient.connect(self)
+        tcp.TCPClient.connect(self, flow)
         self.timestamp_tcp_setup = time.time()
 
     def send(self, message):

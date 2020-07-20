@@ -99,7 +99,7 @@ class UpstreamConnectLayer(base.Layer):
         if resp.status_code != 200:
             raise exceptions.ProtocolException("Reconnect: Upstream server refuses CONNECT request")
 
-    def connect(self):
+    def connect(self, flow):
         if not self.server_conn.connected():
             self.ctx.connect()
             self._send_connect_request()
@@ -229,7 +229,8 @@ class HttpLayer(base.Layer):
             self.establish_server_connection(
                 f.request.host,
                 f.request.port,
-                f.request.scheme
+                f.request.scheme,
+                f
             )
             self.send_request(f.request)
             f.response = self.read_response_headers()
@@ -342,7 +343,8 @@ class HttpLayer(base.Layer):
                 self.establish_server_connection(
                     f.request.host,
                     f.request.port,
-                    f.request.scheme
+                    f.request.scheme,
+                    f
                 )
 
                 def get_response():
@@ -497,7 +499,7 @@ class HttpLayer(base.Layer):
             self.log("Changing upstream proxy to {} (not CONNECTed)".format(repr(address)), "debug")
             self.set_server(address)
 
-    def establish_server_connection(self, host: str, port: int, scheme: str):
+    def establish_server_connection(self, host: str, port: int, scheme: str, flow):
         tls = (scheme == "https")
 
         if self.mode is HTTPMode.regular or self.mode is HTTPMode.transparent:
@@ -508,9 +510,9 @@ class HttpLayer(base.Layer):
                 self.set_server_tls(tls, address[0])
             # Establish connection is necessary.
             if not self.server_conn.connected():
-                self.connect()
+                self.connect(flow)
         else:
             if not self.server_conn.connected():
-                self.connect()
+                self.connect(flow)
             if tls:
                 raise exceptions.HttpProtocolException("Cannot change scheme in upstream proxy mode.")

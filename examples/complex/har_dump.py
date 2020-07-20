@@ -297,7 +297,7 @@ class HarDumpAddOn:
         return {
             "pageref": "",
             "startedDateTime": "",
-            "time": 0,
+            "time": 999,
             "request": {},
             "response": {},
             "cache": {},
@@ -508,10 +508,10 @@ class HarDumpAddOn:
             return self.http_connect_timings.pop(client_conn, None)
         return None
 
-    def populate_har_entry_with_default_response(self, flow):
+    def populate_har_entry(self, flow):
         full_url = self.get_full_url(flow.request)
 
-        ctx.log.debug('Creating new har entry for request: {}'.format(full_url))
+        ctx.log.debug('Populating har entry for request: {}'.format(full_url))
 
         har_entry = flow.server_conn.currentHarEntry
 
@@ -529,19 +529,18 @@ class HarDumpAddOn:
         har_entry['response'] = har_response
 
     def append_har_entry(self, har_entry):
-        self.har['log']['entries'].append(har_entry)
+        har = self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
+        har['log']['entries'].append(har_entry)
 
     def request(self, flow):
         if 'WhiteListFiltered' in flow.metadata or 'BlackListFiltered' in flow.metadata:
             return
 
-        self.populate_har_entry_with_default_response(flow)
+        self.populate_har_entry(flow)
 
         req_url = 'none'
         if flow.request is not None:
             req_url = flow.request.url
-
-        ctx.log.debug('Incoming request, url: {}'.format(req_url))
 
         self.get_or_create_har(DEFAULT_PAGE_REF, DEFAULT_PAGE_TITLE, True)
 
@@ -566,17 +565,17 @@ class HarDumpAddOn:
             har_entry['timings']['dnsNanos'] = connect_timing['dnsTimeNanos']
 
     def capture_request_cookies(self, flow):
-        har_entry = flow.metadata['currentHarEntry']
+        har_entry = flow.server_conn.currentHarEntry
         har_entry['request']['cookies'] = \
             self.format_request_cookies(flow.request.cookies.fields)
 
     def capture_request_headers(self, flow):
-        har_entry = flow.metadata['currentHarEntry']
+        har_entry = flow.server_conn.currentHarEntry
         har_entry['request']['headers'] = \
             self.name_value(flow.request.headers)
 
     def capture_request_content(self, flow):
-        har_entry = flow.metadata['currentHarEntry']
+        har_entry = flow.server_conn.currentHarEntry
         params = [
             {"name": a, "value": b}
             for a, b in flow.request.urlencoded_form.items(multi=True)

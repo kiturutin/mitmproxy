@@ -4,7 +4,7 @@ import typing
 import tempfile
 
 from time import sleep
-
+import mitmproxy.tcp
 import re
 
 from datetime import datetime
@@ -45,14 +45,27 @@ class InitFlowAddOn:
         return InitFlowResource(self)
 
     def http_connect(self, flow):
+        ctx.log.debug('Incoming CONNECT request: {}'.format(str(flow.request)))
+
         if not hasattr(flow.server_conn, 'currentHarEntry'):
             self.init_har_entry(flow)
+        else:
+            ctx.log.debug('Found flow data for request: {}, har entry is: {}'.format(str(flow.request), str(flow.server_conn.currentHarEntry)))
 
     def request(self, flow):
+        ctx.log.debug('Incoming HTTP request: {}'.format(str(flow.request)))
+
         if not hasattr(flow.server_conn, 'currentHarEntry'):
             self.init_har_entry(flow)
+        else:
+            ctx.log.debug('Found flow data for request: {}, har entry is: {}'.format(str(flow.request), str(flow.server_conn.currentHarEntry)))
+
+    def tcp_start(self, flow):
+        print()
 
     def init_har_entry(self, flow):
+        ctx.log.debug("Initializing har entry for flow: {}".format(str(flow.request)))
+
         setattr(flow.server_conn, 'currentHarEntry', self.har_dump_addon.generate_har_entry())
         self.har_dump_addon.append_har_entry(flow.server_conn.currentHarEntry)
 

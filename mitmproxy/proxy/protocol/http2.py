@@ -432,7 +432,7 @@ class Http2SingleStreamLayer(httpbase._HttpTransmissionLayer, basethread.BaseThr
             self.response_arrived.set()
             self.response_data_finished.set()
 
-    def connect(self):  # pragma: no cover
+    def connect(self, flow):  # pragma: no cover
         raise exceptions.Http2ProtocolException("HTTP2 layer should already have a connection.")
 
     def disconnect(self):  # pragma: no cover
