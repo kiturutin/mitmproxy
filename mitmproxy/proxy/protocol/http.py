@@ -200,6 +200,10 @@ class HttpLayer(base.Layer):
                 live=self,
                 mode=self.mode.name
             )
+            root_ctx = self.get_root_ctx()
+            if hasattr(root_ctx, "flow"):
+                flow.metadata = root_ctx.flow.metadata
+            setattr(self.get_root_ctx(), "flow", flow)
             if not self._process_flow(flow):
                 return
 
@@ -224,8 +228,11 @@ class HttpLayer(base.Layer):
         ) as e:
             # HTTPS tasting means that ordinary errors like resolution
             # and connection errors can happen here.
-            self.send_error_response(502, repr(e))
-            f.error = flow.Error(str(e))
+            if isinstance(e, TcpTimeout):
+                self.send_error_response(504, repr(e))
+            else:
+                self.send_error_response(502, repr(e))
+            f.error = flow.Error(msg=str(e), err=e)
             self.channel.ask("error", f)
             return False
 
@@ -245,6 +252,8 @@ class HttpLayer(base.Layer):
             f.response.data.content = b"".join(
                 self.read_response_body(f.request, f.response)
             )
+
+        self.channel.ask("response_from_upstream_proxy", f)
         self.send_response(f.response)
         if is_ok(f.response.status_code):
             layer = UpstreamConnectLayer(self, f.request)
@@ -308,7 +317,7 @@ class HttpLayer(base.Layer):
             self.send_error_response(400, repr(e))
             # Request may be malformed at this point, so we unset it.
             f.request = None
-            f.error = flow.Error(str(e))
+            f.error = flow.Error(msg=str(e), err=e)
             self.channel.ask("error", f)
             self.log(
                 "request",
@@ -356,6 +365,7 @@ class HttpLayer(base.Layer):
                 )
 
                 def get_response():
+                    self.channel.ask("http_proxy_to_server_request_started", f)
                     self.send_request_headers(f.request)
                     if f.request.stream:
                         chunks = self.read_request_body(f.request)
@@ -364,10 +374,11 @@ class HttpLayer(base.Layer):
                         self.send_request_body(f.request, chunks)
                     else:
                         self.send_request_body(f.request, [f.request.data.content])
-
+                    self.channel.ask("http_proxy_to_server_request_finished", f)
                     self.send_request_trailers(f.request)
 
                     f.response = self.read_response_headers()
+                    self.channel.ask("http_server_to_proxy_response_receiving", f)
 
                 try:
                     get_response()
@@ -428,6 +439,7 @@ class HttpLayer(base.Layer):
             f.response.data.trailers = self.read_response_trailers(f.request, f.response)
 
             self.log("response", "debug", [repr(f.response)])
+            self.channel.ask("http_server_to_proxy_response_received", f)
             self.channel.ask("response", f)
 
             if not f.response.stream:
@@ -475,8 +487,11 @@ class HttpLayer(base.Layer):
 
         except (exceptions.ProtocolException, exceptions.NetlibException) as e:
             if not f.response:
-                self.send_error_response(502, repr(e))
-                f.error = flow.Error(str(e))
+                if isinstance(e, TcpTimeout):
+                    self.send_error_response(504, repr(e))
+                else:
+                    self.send_error_response(502, repr(e))
+                f.error = flow.Error(msg=str(e), err=e)
                 self.channel.ask("error", f)
                 return False
             else:

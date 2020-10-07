@@ -179,7 +179,7 @@ class ServerConnection(tcp.TCPClient, stateobject.StateObject):
         timestamp_end: Connection end timestamp
     """
 
-    def __init__(self, address, source_address=None, spoof_source_address=None):
+    def __init__(self, address, source_address=None, spoof_source_address=None, channel=None):
         tcp.TCPClient.__init__(self, address, source_address, spoof_source_address)
 
         self.id = str(uuid.uuid4())
@@ -190,6 +190,7 @@ class ServerConnection(tcp.TCPClient, stateobject.StateObject):
         self.timestamp_end = None
         self.timestamp_tcp_setup = None
         self.timestamp_tls_setup = None
+        self.channel = channel
 
     def connected(self):
         return bool(self.connection) and not self.finished
@@ -262,9 +263,9 @@ class ServerConnection(tcp.TCPClient, stateobject.StateObject):
             via=None
         ))
 
-    def connect(self):
+    def connect(self, flow):
         self.timestamp_start = time.time()
-        tcp.TCPClient.connect(self)
+        tcp.TCPClient.connect(self, flow)
         self.timestamp_tcp_setup = time.time()
 
     def send(self, message):

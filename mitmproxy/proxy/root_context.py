@@ -28,6 +28,12 @@ class RootContext:
         self.channel = channel
         self.config = config
 
+    def get_root_ctx(self):
+        result = self
+        while hasattr(result, "ctx"):
+            result = result.ctx
+        return result
+
     def next_layer(self, top_layer):
         """
         This function determines the next layer in the protocol stack.

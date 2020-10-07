@@ -191,5 +191,21 @@ class Options(optmanager.OptManager):
             Disable HTTP form validation.
             """
         )
+        self.add_option(
+            "connection_idle_seconds", int, False,
+            ""
+        )
+        self.add_option(
+            "dns_resolving_delay_ms", int, False,
+            ""
+        )
+        self.add_option(
+            "upstream_proxy_credentials", str, "",
+            ""
+        )
+        self.add_option(
+            "upstream_proxy_exception_hosts", Sequence[str], [],
+            ""
+        )
 
         self.update(**kwargs)

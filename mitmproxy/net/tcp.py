@@ -7,6 +7,8 @@ import threading
 import time
 import traceback
 
+from mitmproxy import ctx
+
 from typing import Optional  # noqa
 
 from mitmproxy.net import tls
@@ -16,6 +18,7 @@ from OpenSSL import SSL
 from mitmproxy import certs
 from mitmproxy import exceptions
 from mitmproxy.coretypes import basethread
+from mitmproxy.net.timeout_helper import TimeoutHelper
 
 socket_fileobject = socket.SocketIO
 
@@ -393,12 +396,20 @@ class TCPClient(_Connection):
             self.connection.set_tlsext_host_name(sni.encode("idna"))
         self.connection.set_connect_state()
         try:
-            self.connection.do_handshake()
+            idle_timeout = ctx.options.connection_idle_seconds
+            if idle_timeout != -1:
+                timeout = idle_timeout
+            else:
+                timeout = 60
+            self.channel.ask("ssl_handshake_started", self)
+            TimeoutHelper.wrap_with_timeout(self.connection.do_handshake, timeout)
         except SSL.Error as v:
             if self.ssl_verification_error:
                 raise self.ssl_verification_error
             else:
                 raise exceptions.TlsException("SSL handshake error: %s" % repr(v))
+        finally:
+            self.channel.ask("ssl_handshake_finished", self)
 
         self.cert = certs.Cert(self.connection.get_peer_certificate())
 
@@ -419,6 +430,9 @@ class TCPClient(_Connection):
         # https://github.com/python/cpython/blob/3cc5817cfaf5663645f4ee447eaed603d2ad290a/Lib/socket.py
 
         err = None
+        idle_timeout = ctx.options.connection_idle_seconds
+        if idle_timeout != -1:
+            timeout = idle_timeout
         for res in socket.getaddrinfo(self.address[0], self.address[1], 0, socket.SOCK_STREAM):
             af, socktype, proto, canonname, sa = res
             sock = None
@@ -444,6 +458,7 @@ class TCPClient(_Connection):
 
             except socket.error as _:
                 err = _
+                self.ip_address = sa
                 if sock is not None:
                     sock.close()
 
@@ -452,14 +467,19 @@ class TCPClient(_Connection):
         else:
             raise socket.error("getaddrinfo returns an empty list")  # pragma: no cover
 
-    def connect(self):
+    def connect(self, flow):
         try:
+            self.channel.ask("tcp_resolving_server_address_started", flow)
             connection = self.create_connection()
+            if ctx.options.dns_resolving_delay_ms > 0:
+                time.sleep(ctx.options.dns_resolving_delay_ms / 1000)
         except (socket.error, IOError) as err:
             raise exceptions.TcpException(
                 'Error connecting to "%s": %s' %
                 (self.address[0], err)
-            )
+            ) from err
+        finally:
+            self.channel.ask("tcp_resolving_server_address_finished", flow)
         self.connection = connection
         self.source_address = connection.getsockname()
         self.ip_address = connection.getpeername()

@@ -107,7 +107,7 @@ class RequestReplayThread(basethread.BaseThread):
             if response_reply == exceptions.Kill:
                 raise exceptions.Kill()
         except (exceptions.ReplayException, exceptions.NetlibException) as e:
-            f.error = flow.Error(str(e))
+            f.error = flow.Error(str(e), err=e)
             self.channel.ask("error", f)
         except exceptions.Kill:
             self.channel.tell("log", log.LogEntry(flow.Error.KILLED_MESSAGE, "info"))

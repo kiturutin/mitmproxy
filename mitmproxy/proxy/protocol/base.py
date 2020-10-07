@@ -125,11 +125,16 @@ class ServerConnectionMixin:
     def __make_server_conn(self, server_address):
         if self.config.options.spoof_source_address and self.config.options.upstream_bind_address == '':
             return connections.ServerConnection(
-                server_address, (self.ctx.client_conn.address[0], 0), True)
+                address=server_address,
+                source_address=(self.ctx.client_conn.address[0], 0),
+                spoof_source_address=True,
+                channel=self.ctx.channel)
         else:
             return connections.ServerConnection(
-                server_address, (self.config.options.upstream_bind_address, 0),
-                self.config.options.spoof_source_address
+                address=server_address,
+                source_address=(self.config.options.upstream_bind_address, 0),
+                spoof_source_address=self.config.options.spoof_source_address,
+                channel=self.ctx.channel
             )
 
     def set_server(self, address):
@@ -166,7 +171,8 @@ class ServerConnectionMixin:
         if not self.server_conn.address:
             raise exceptions.ProtocolException("Cannot connect to server, no server address given.")
         try:
-            self.server_conn.connect()
+            flow = self.ctx.get_root_ctx().flow
+            self.server_conn.connect(flow)
             self.log("serverconnect", "debug", [repr(self.server_conn.address)])
             self.channel.ask("serverconnect", self.server_conn)
         except exceptions.TcpException as e:
@@ -174,4 +180,4 @@ class ServerConnectionMixin:
                 "Server connection to {} failed: {}".format(
                     repr(self.server_conn.address), str(e)
                 )
-            )
+            ) from e

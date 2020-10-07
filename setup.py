@@ -86,6 +86,7 @@ setup(
         "wsproto>=0.14,<0.16",
         "publicsuffix2>=2.20190812,<3",
         "zstandard>=0.11,<0.15",
+        "falcon>=2.0.0"
     ],
     extras_require={
         ':sys_platform == "win32"': [
