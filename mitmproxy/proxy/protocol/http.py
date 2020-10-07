@@ -8,6 +8,7 @@ from mitmproxy import connections  # noqa
 from mitmproxy import exceptions
 from mitmproxy import http
 from mitmproxy import flow
+from mitmproxy.exceptions import TcpTimeout
 from mitmproxy.proxy.protocol import base
 from mitmproxy.proxy.protocol.websocket import WebSocketLayer
 from mitmproxy.net import websockets
